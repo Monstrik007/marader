@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Карта Мародеров</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=IM+Fell+English+SC&display=swap');
+
+    body {
+      margin: 0;
+      overflow: hidden;
+      background-color: black;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      height: 100vh;
+      font-family: 'IM Fell English SC', serif;
+    }
+
+    /* Контейнер с картой */
+    #map-container {
+      position: relative;
+      width: 80vw;
+      height: 80vh;
+      background-image: url('map.png'); /* Подставьте свою картинку карты */
+      background-size: cover;
+      background-position: center;
+      border: 5px solid #8b4513;
+      box-shadow: 0 0 15px #8b4513;
+      filter: sepia(80%) contrast(90%) brightness(80%) saturate(50%);
+    }
+
+    /* Имена персонажей */
+    .character-name {
+      position: absolute;
+      font-size: 18px;
+      color: #8B4513;
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+    }
+
+    /* Следы */
+    .footprint {
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      background-image: url('footprint.png');
+      background-size: cover;
+      background-repeat: no-repeat;
+      pointer-events: none;
+      opacity: 1;
+      transition: opacity 2s ease-out;
+    }
+
+    /* Надпись о встрече (появляется сверху карты) */
+    .meeting-info {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #8B4513;
+      background-color: rgba(255, 228, 196, 0.8);
+      padding: 5px 10px;
+      border: 1px solid #8B4513;
+      border-radius: 5px;
+      text-align: center;
+      font-size: 18px;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    /* Нижняя надпись "Карта Мародеров" */
+    #footer {
+      position: relative;
+      margin-top: auto;
+      margin-bottom: 10px;
+      color: #8B4513;
+      opacity: 0.6;
+      font-size: 28px;
+      text-shadow: 0 0 5px rgba(139, 69, 19, 0.5);
+    }
+  </style>
+</head>
+<body>
+  <div id="map-container"></div>
+  <div id="footer">Карта Мародеров</div>
+
+  <script>
+    const mapContainer = document.getElementById('map-container');
+    const mapWidth = mapContainer.offsetWidth;
+    const mapHeight = mapContainer.offsetHeight;
+
+    /**
+     * Возможные состояния:
+     *  - idle       : идёт к случайной точке (wanderTarget)
+     *  - waiting    : стоит на месте 1–5 секунд (после достижения wanderTarget)
+     *  - moving     : целенаправленно идёт к другому персонажу
+     *  - meeting    : 5 секунд стоит на месте при встрече
+     *  - dispersing : после встречи бежит в далёкую точку
+     */
+
+    // Массив персонажей
+    const characters = [
+      {
+        name: 'Алиса',
+        x: Math.random() * mapWidth,
+        y: Math.random() * mapHeight,
+        state: 'idle',
+        stepCounter: 0,
+        // Для meeting
+        meetingTimer: 0,
+        // Для waiting (пауза)
+        waitEndTime: 0,
+        // Цель в idle
+        wanderTarget: { x: 0, y: 0 },
+        // Цель в moving (другой персонаж)
+        targetCharacter: null,
+        // disperse
+        disperseTarget: { x: 0, y: 0 },
+        disperseEndTime: 0
+      },
+      {
+        name: 'Виталик',
+        x: Math.random() * mapWidth,
+        y: Math.random() * mapHeight,
+        state: 'idle',
+        stepCounter: 0,
+        meetingTimer: 0,
+        waitEndTime: 0,
+        wanderTarget: { x: 0, y: 0 },
+        targetCharacter: null,
+        disperseTarget: { x: 0, y: 0 },
+        disperseEndTime: 0
+      },
+      {
+        name: 'Маша',
+        x: Math.random() * mapWidth,
+        y: Math.random() * mapHeight,
+        state: 'idle',
+        stepCounter: 0,
+        meetingTimer: 0,
+        waitEndTime: 0,
+        wanderTarget: { x: 0, y: 0 },
+        targetCharacter: null,
+        disperseTarget: { x: 0, y: 0 },
+        disperseEndTime: 0
+      }
+    ];
+
+    // Создаём элементы для имён
+    characters.forEach((ch) => {
+      const charElement = document.createElement('div');
+      charElement.classList.add('character-name');
+      charElement.textContent = ch.name;
+      charElement.style.top = `${ch.y - 20}px`;
+      charElement.style.left = `${ch.x}px`;
+      mapContainer.appendChild(charElement);
+
+      ch.element = charElement;
+
+      // Задаём первую wanderTarget
+      ch.wanderTarget = getRandomPoint();
+    });
+
+    // Возвращает случайную точку на карте
+    function getRandomPoint() {
+      return {
+        x: Math.random() * (mapWidth - 50),
+        y: Math.random() * (mapHeight - 20)
+      };
+    }
+
+    // "Далёкая" точка (не ближе 300px)
+    function getFarRandomPoint(x, y, minDistance = 300) {
+      let newX, newY;
+      let tries = 0;
+      do {
+        newX = Math.random() * (mapWidth - 50);
+        newY = Math.random() * (mapHeight - 20);
+        const dist = Math.sqrt((newX - x) ** 2 + (newY - y) ** 2);
+        if (dist > minDistance) {
+          return { x: newX, y: newY };
+        }
+        tries++;
+      } while (tries < 200);
+      return { x: newX, y: newY };
+    }
+
+    // Двигаем персонажа
+    function moveCharacter(ch, dx, dy) {
+      ch.x += dx;
+      ch.y += dy;
+
+      // Ограничиваем движение в пределах карты
+      ch.x = Math.max(0, Math.min(mapWidth - 50, ch.x));
+      ch.y = Math.max(0, Math.min(mapHeight - 20, ch.y));
+
+      ch.element.style.top = `${ch.y - 20}px`;
+      ch.element.style.left = `${ch.x}px`;
+
+      // Оставляем след
+      ch.stepCounter++;
+      if (ch.stepCounter % 4 === 0) {
+        const footprint = document.createElement('div');
+        footprint.classList.add('footprint');
+        footprint.style.top = `${ch.y}px`;
+        footprint.style.left = `${ch.x}px`;
+        mapContainer.appendChild(footprint);
+
+        setTimeout(() => {
+          footprint.style.opacity = '0';
+          setTimeout(() => footprint.remove(), 2000);
+        }, 2000);
+      }
+    }
+
+    // Выводит сообщение о встрече (для 2, 3 и более человек)
+    function showMeetingInfo(namesArray) {
+      let text = '';
+      if (namesArray.length === 2) {
+        text = namesArray.join(' и ') + ' встретились!';
+      } else if (namesArray.length === 3) {
+        text = namesArray[0] + ', ' + namesArray[1] + ' и ' + namesArray[2] + ' встретились!';
+      } else {
+        text =
+          namesArray.slice(0, -1).join(', ') +
+          ' и ' +
+          namesArray[namesArray.length - 1] +
+          ' встретились!';
+      }
+      const info = document.createElement('div');
+      info.classList.add('meeting-info');
+      info.textContent = text;
+      mapContainer.appendChild(info);
+      setTimeout(() => info.remove(), 3000);
+    }
+
+    // Групповая проверка (2+ персонажей), ближе 50px → meeting
+    function checkCollisionsForGroups() {
+      // Те, кто НЕ в meeting и НЕ в dispersing
+      const canMeet = characters.filter(ch => ch.state !== 'meeting' && ch.state !== 'dispersing');
+
+      const visited = new Set();
+      const groups = [];
+
+      for (let i = 0; i < canMeet.length; i++) {
+        const c = canMeet[i];
+        if (!visited.has(c)) {
+          const stack = [c];
+          const group = [];
+          while (stack.length > 0) {
+            const current = stack.pop();
+            if (!visited.has(current)) {
+              visited.add(current);
+              group.push(current);
+              // Ищем соседей ближе 50px
+              for (let k = 0; k < canMeet.length; k++) {
+                const other = canMeet[k];
+                if (!visited.has(other)) {
+                  const dist = Math.sqrt(
+                    (current.x - other.x) ** 2 + (current.y - other.y) ** 2
+                  );
+                  if (dist < 50) {
+                    stack.push(other);
+                  }
+                }
+              }
+            }
+          }
+          // Если группа содержит 2+ человек
+          if (group.length > 1) {
+            groups.push(group);
+          }
+        }
+      }
+
+      // Устраиваем встречу
+      groups.forEach(group => {
+        group.forEach(ch => {
+          ch.state = 'meeting';
+          ch.meetingTimer = Date.now() + 5000; // 5 секунд
+          ch.targetCharacter = null;          // Если кто-то шёл к кому-то
+        });
+        // Сообщение
+        showMeetingInfo(group.map(ch => ch.name));
+      });
+    }
+
+    // Основной цикл
+    setInterval(() => {
+      characters.forEach(ch => {
+        switch (ch.state) {
+          case 'idle':
+            // В 2 раза реже целенаправленно идём к другому персонажу → 10% вместо 20%
+            if (Math.random() < 0.1 && characters.length > 1) {
+              // Выбираем случайного другого
+              let other;
+              do {
+                other = characters[Math.floor(Math.random() * characters.length)];
+              } while (other === ch);
+
+              ch.targetCharacter = other;
+              ch.state = 'moving';
+              break;
+            }
+
+            // Иначе идём к wanderTarget
+            {
+              const dx = ch.wanderTarget.x - ch.x;
+              const dy = ch.wanderTarget.y - ch.y;
+              const dist = Math.sqrt(dx * dx + dy * dy);
+              if (dist < 20) {
+                // Дошли до точки → переходим в waiting
+                ch.state = 'waiting';
+                ch.waitEndTime = Date.now() + (1000 + Math.random() * 4000); // 1-5 секунд
+              } else {
+                // Идём со скоростью 3
+                const speed = 3;
+                moveCharacter(ch, (dx / dist) * speed, (dy / dist) * speed);
+              }
+            }
+            break;
+
+          case 'waiting':
+            // Просто стоим, пока не закончится waitEndTime
+            if (Date.now() > ch.waitEndTime) {
+              // Назначаем новую wanderTarget
+              ch.wanderTarget = getRandomPoint();
+              ch.state = 'idle';
+            }
+            break;
+
+          case 'moving':
+            // Целенаправленно идём к другому персонажу
+            if (!ch.targetCharacter) {
+              // Если вдруг потеряли цель
+              ch.state = 'idle';
+              break;
+            }
+            // Проверяем, вдруг цель в meeting/dispersing? 
+            // Тогда лучше вернуться в idle
+            if (ch.targetCharacter.state === 'meeting' || ch.targetCharacter.state === 'dispersing') {
+              ch.targetCharacter = null;
+              ch.state = 'idle';
+              break;
+            }
+            // Идём к координатам цели
+            const dx = ch.targetCharacter.x - ch.x;
+            const dy = ch.targetCharacter.y - ch.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < 50) {
+              // Дошли (почти) → дальше логика встречи будет обработана 
+              // в checkCollisionsForGroups (если рядом ещё кто-то)
+              ch.state = 'idle';
+              ch.targetCharacter = null;
+            } else {
+              // Идём со скоростью 4
+              const speed = 4;
+              moveCharacter(ch, (dx / dist) * speed, (dy / dist) * speed);
+            }
+            break;
+
+          case 'meeting':
+            // Стоим 5 секунд
+            if (Date.now() > ch.meetingTimer) {
+              // Закончили встречу → dispersing
+              ch.state = 'dispersing';
+              ch.disperseTarget = getFarRandomPoint(ch.x, ch.y, 300);
+              ch.disperseEndTime = Date.now() + 10000; // 10 секунд разбегаются
+            }
+            break;
+
+          case 'dispersing':
+            // Идём к disperseTarget
+            if (Date.now() > ch.disperseEndTime) {
+              // Закончили разбегаться → idle
+              ch.state = 'idle';
+              ch.wanderTarget = getRandomPoint();
+            } else {
+              const dxD = ch.disperseTarget.x - ch.x;
+              const dyD = ch.disperseTarget.y - ch.y;
+              const distD = Math.sqrt(dxD * dxD + dyD * dyD);
+              if (distD < 20) {
+                // Уже дошли → тоже idle
+                ch.state = 'idle';
+                ch.wanderTarget = getRandomPoint();
+              } else {
+                const speed = 5;
+                moveCharacter(ch, (dxD / distD) * speed, (dyD / distD) * speed);
+              }
+            }
+            break;
+        }
+      });
+
+      // Проверяем групповые встречи (если персонажи близко)
+      checkCollisionsForGroups();
+    }, 300);
+  </script>
+</body>
+</html>
